@@ -55,6 +55,8 @@ namespace AJE
         [KSPField]
         public double intercoolerIntakeArea = 1;
         [KSPField]
+        public string intercoolerType = "CrossFlowUnmixed";
+        [KSPField]
         public double coolerEffic = 0d;
         [KSPField]
         public double coolerMin = -200f;
@@ -205,7 +207,7 @@ namespace AJE
                     ramAir,
                     displacement * displMultiplier,
                     compression,
-                    coolingLegacy, intercoolerCoolingFactor, intercoolerIntakeArea,
+                    coolingLegacy, intercoolerCoolingFactor, intercoolerIntakeArea, intercoolerType,
                     coolerEffic,
                     coolerMin + CTOK,
                     exhaustThrust,

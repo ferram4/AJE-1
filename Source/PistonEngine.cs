@@ -43,6 +43,7 @@ namespace AJE
         public double _intercoolerCoolingFactor; //intercooler surface area * heat flux per Kelvin for this design
         public double _intercoolerIntakeArea;   //area for cooling air throuhg outer portion of intercooler
         public double _minAllowedIntercoolerVel = 10;
+        public FGTable _intercoolerEffTable = null;
         public double _ramAir;
         public double _exhaustThrust = 0d;
         public double _meredithEffect = 0d;
@@ -86,7 +87,7 @@ namespace AJE
 
         #region Setup
         public PistonEngine(double power, double speed, double BSFC, double ramair, double displacement,
-            double compression, bool legacyCooling, double intercoolerCoolingArea, double intercoolerIntakeArea, double coolerEffic, double coolerMin, double exhaustThrust, double meredithEffect,
+            double compression, bool legacyCooling, double intercoolerCoolingArea, double intercoolerIntakeArea, string intercoolerType, double coolerEffic, double coolerMin, double exhaustThrust, double meredithEffect,
             double wastegate, double boost0, double boost1, double rated0, double rated1, double cost1, double switchAlt, bool turbo)
         {
             _running = false;
@@ -124,6 +125,23 @@ namespace AJE
             _chargeDensity = 0d;
 
             _coolerLegacy = legacyCooling;
+            if(!legacyCooling)
+            {
+                ConfigNode node = null;
+                foreach (ConfigNode n in GameDatabase.Instance.GetConfigNodes("HEATEXCHANGER"))
+                {
+                    if (n.HasValue("name"))
+                        if (n.GetValue("name").Equals(intercoolerType))
+                        {
+                            node = n;
+                            break;
+                        }
+                }
+                if(node != null)
+                    _intercoolerEffTable = new FGTable(node);
+                else
+                    Debug.LogError("Could not find heat exchanger of type " + intercoolerType + "!");
+            }
             _intercoolerCoolingFactor = intercoolerCoolingArea;
             _intercoolerIntakeArea = intercoolerIntakeArea;
             _intercoolerEfficiency = coolerEffic;
