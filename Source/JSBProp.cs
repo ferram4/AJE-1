@@ -151,6 +151,25 @@ namespace AJE
 
             return Value;
         }
+        //just dumps all the values to log to check that they loaded correctly
+        public void DebugDumpToLog()
+        {
+            StringBuilder stringDump = new StringBuilder();
+            for (int i = 0; i < Data.GetLength(0); i++)
+            {
+                stringDump.Append("Row ");
+                stringDump.Append(i);
+                stringDump.Append(": ");
+                for (int j = 0; j < Data.GetLength(1); j++)
+                {
+                    stringDump.Append(Data[i, j]);
+                    stringDump.Append(" ");
+                }
+                stringDump.AppendLine();
+            }
+
+            Debug.Log(stringDump.ToString());
+        }
     }
 
     // taken from JSBSim

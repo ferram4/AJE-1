@@ -138,9 +138,11 @@ namespace AJE
                         }
                 }
                 if(node != null)
-                    _intercoolerEffTable = new FGTable(node);
+                    _intercoolerEffTable = new FGTable(node.GetNode("effectivenessTable"));
                 else
                     Debug.LogError("Could not find heat exchanger of type " + intercoolerType + "!");
+
+                //_intercoolerEffTable.DebugDumpToLog();
             }
             _intercoolerCoolingFactor = intercoolerCoolingArea;
             _intercoolerIntakeArea = intercoolerIntakeArea;
@@ -440,10 +442,7 @@ namespace AJE
                 C_star = C_min / C_max;
                 NTU = _intercoolerCoolingFactor / C_min;
 
-                eff = -C_star * Math.Pow(NTU, 0.78);            //note: this needs to be made into an FGtable for speed purposes
-                eff = Math.Exp(eff) - 1;
-                eff *= Math.Pow(NTU, 0.22) / C_star;
-                eff = 1 - Math.Exp(eff);
+                eff = _intercoolerEffTable.GetValue(C_star, NTU);
 
                 _intercoolerEfficiency = eff;
 
@@ -467,10 +466,7 @@ namespace AJE
                 C_star = C_min / C_max;
                 NTU = _intercoolerCoolingFactor / C_min;
 
-                eff = -C_star * Math.Pow(NTU, 0.78);            //note: this needs to be made into an FGtable for speed purposes
-                eff = Math.Exp(eff) - 1;
-                eff *= Math.Pow(NTU, 0.22) / C_star;
-                eff = 1 - Math.Exp(eff);
+                eff = _intercoolerEffTable.GetValue(C_star, NTU);
 
                 _intercoolerEfficiency = eff;
 
