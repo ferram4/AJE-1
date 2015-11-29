@@ -76,6 +76,11 @@ namespace AJE
         [KSPField(isPersistant = false, guiActive = false)]
         public float wetThrust = 0f;
 
+        [KSPField(isPersistant = false, guiActive = false)]
+        public string spoolEffectName2 = "spool2";
+        [KSPField(isPersistant = false, guiActive = false)]
+        public string powerEffectName2 = "power2";
+
         [KSPField(isPersistant = false, guiActive = true, guiName = "Compression Ratio", guiFormat = "F1")]
         public float prat3 = 0f;
         
@@ -101,7 +106,7 @@ namespace AJE
                 exhaustMixer,
                 adjustableNozzle
                 );
-            useAtmCurve = atmChangeFlow = useVelCurve = false;
+            useAtmCurve = atmChangeFlow = useVelCurve = useAtmCurveIsp = useVelCurveIsp = false;
             maxEngineTemp = maxT3;
             if (autoignitionTemp < 0f || float.IsInfinity(autoignitionTemp))
                 autoignitionTemp = 500f; // Autoignition of Kerosene is 493.15K
@@ -119,6 +124,13 @@ namespace AJE
         {
             if (engineSolver == null || !(engineSolver is SolverJet))
                 CreateEngine();
+        }
+
+        public override void Shutdown()
+        {
+            base.Shutdown();
+            currentThrottle = 0.01f;
+            base.UpdateThrottle();
         }
 
         public override void UpdateThrottle()
@@ -146,12 +158,36 @@ namespace AJE
         public override void CalculateEngineParams()
         {
             base.CalculateEngineParams();
-            prat3 = (float)(engineSolver as SolverJet).Prat3;
+            prat3 = (float)(engineSolver as SolverJet).GetPrat3();
         }
 
         public override float RequiredIntakeArea()
         {
             return base.RequiredIntakeArea() * areaFudgeFactor;
+        }
+
+        public override void FXUpdate()
+        {
+            base.FXUpdate();
+            
+            part.Effect(spoolEffectName2, engineSolver.GetFXSpool());
+            part.Effect(powerEffectName2, engineSolver.GetFXPower());
+        }
+
+        public double GetEmissiveTemp()
+        {
+            if (isOperational)
+                return (engineSolver as SolverJet).GetT7();
+            else
+                return part.temperature;
+        }
+
+        public float GetRelativeNozzleArea()
+        {
+            if (isOperational)
+                return (float)(engineSolver as SolverJet).GetNozzleArea() / Need_Area;
+            else
+                return 0f;
         }
 
         #region Engine Fitting
@@ -234,7 +270,7 @@ namespace AJE
             bool oldE = EngineIgnited;
             EngineIgnited = true;
             
-            UpdateFlightCondition(ambientTherm, 0d, Vector3d.zero, 0d, true);
+            UpdateFlightCondition(ambientTherm, 0d, Vector3d.zero, 0d, true, false);
             double thrust = (engineSolver.GetThrust() * 0.001d);
 
             if (CPR == 1f) // ramjet
@@ -260,7 +296,7 @@ namespace AJE
                     if (!primaryField)
                         output += "\n   <b>SFC: </b>" + engineSolver.GetSFC().ToString("N4") + " kg/kgf-h";
                     currentThrottle = 2f / 3f;
-                    UpdateFlightCondition(ambientTherm, 0d, Vector3d.zero, 0d, true);
+                    UpdateFlightCondition(ambientTherm, 0d, Vector3d.zero, 0d, true, false);
                     thrust = (engineSolver.GetThrust() * 0.001d);
                     output += "\n<b>Static Thrust (dry): </b>" + thrust.ToString("N2") + " kN";
                     if (!primaryField)
@@ -273,7 +309,7 @@ namespace AJE
                 output += "\n<b>Required Area:</b> " + RequiredIntakeArea().ToString("F3") + " m^2";
                 if (BPR > 0f)
                     output += "\n<b>Bypass Ratio:</b> " + BPR.ToString("F2");
-                output += "\n<b>Compression Ratio (static):</b> " + (engineSolver as SolverJet).Prat3.ToString("F1") + "\n";
+                output += "\n<b>Compression Ratio (static):</b> " + (engineSolver as SolverJet).GetPrat3().ToString("F1") + "\n";
             }
 
             EngineIgnited = oldE;

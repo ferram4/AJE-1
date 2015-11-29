@@ -149,20 +149,25 @@ namespace AJE
                 combusting = false;
                 statusString = "No oxygen";
             }
-            else if(ffFraction <= 0d)
+            else if (ffFraction <= 0d)
             {
                 combusting = false;
                 statusString = "No fuel";
             }
-            else if(CPR == 1 && M0 < 0.3d)
+            else if (CPR == 1 && M0 < 0.3d)
             {
                 combusting = false;
                 statusString = "Below ignition speed";
             }
-            else if(airRatio < 0.01d)
+            else if (airRatio < 0.01d)
             {
                 combusting = false;
                 statusString = "Insufficient intake area";
+            }
+            else if (underwater)
+            {
+                combusting = false;
+                statusString = "Nozzle in water";
             }
 
             if (combusting)
@@ -265,7 +270,7 @@ namespace AJE
                 double exitEnergy = th7.Cp * th7.T * eta_n * (1.0 - Math.Pow(p8 / th7.P, th7.R / th7.Cp));
                 V8 = Math.Sqrt(Math.Abs(2d * exitEnergy));     //exit velocity - may be negative under certain conditions
                 V8 *= Math.Sign(exitEnergy);
-                Anozzle = th7.CalculateFlowArea(mdot, th7.CalculateMach(V8));
+                Anozzle = th7.CalculateFlowArea(mdot, th7.CalculateMach(Math.Abs(V8)));
                 thrust = V8 * mdot + (p8 - th0.P) * Anozzle;
                 thrust -= mdot * (1d - th7.FF) * (vel);//ram drag
 
@@ -428,13 +433,15 @@ namespace AJE
         public override double GetEngineTemp() { return th3.T; }
         public override double GetArea() { return Aref * (1d + BPR); }
         public override double GetEmissive() { return fxPower; }
-        public override float GetFXPower() { return fxPower; }
+        public override float GetFXPower() { return (float)abThrottle; }
         public override float GetFXRunning() { return fxPower; }
         public override float GetFXThrottle() { return fxPower; }
-        public override float GetFXSpool() { return fxPower; }
+        public override float GetFXSpool() { return (float)mainThrottle; }
         public override bool GetRunning() { return combusting; }
 
-        public double Prat3 { get { return prat3; } }
+        public double GetPrat3() { return prat3; }
+        public double GetT7() { return th7.T; }
+        public double GetNozzleArea() { return Anozzle; }
 
         public double GetAref() { return Aref; }
         public double GetFHV() { return h_f; }
