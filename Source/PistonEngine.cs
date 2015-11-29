@@ -40,7 +40,7 @@ namespace AJE
         public bool _coolerLegacy = true;       //use the legacy cooling model
         public double _coolerEffic;
         public double _coolerMin;
-        public double _intercoolerCoolingFactor; //intercooler surface area * instantaneous section heat transfer coefficient
+        public double _intercoolerCoolingFactor; //intercooler surface area * heat flux per Kelvin for this design
         public double _intercoolerIntakeArea;   //area for cooling air throuhg outer portion of intercooler
         public double _minAllowedIntercoolerVel = 10;
         public double _ramAir;
@@ -400,7 +400,7 @@ namespace AJE
                 return Math.Max(_coolerMin, T_h - (T_h - tAmb) * _coolerEffic);
             }
 
-            //model intercooler as a crossflow, double-unmixed heat exchanger
+            //model intercooler as a crossflow, double-unmixed heat exchanger using the effectiveness-NTU method
             double radiatorMassFlow = _intercoolerIntakeArea * ambientVel * pAmb / (RAir * tAmb);
             double C_h, C_c;        //hot and cold heat capacities
             C_c = radiatorMassFlow * Cp_c;
@@ -425,7 +425,7 @@ namespace AJE
                 eff = -C_star * Math.Pow(NTU, 0.78);            //note: this needs to be made into an FGtable for speed purposes
                 eff = Math.Exp(eff) - 1;
                 eff *= Math.Pow(NTU, 0.22) / C_star;
-                eff = Math.Exp(eff);
+                eff = 1 - Math.Exp(eff);
 
                 _intercoolerEfficiency = eff;
 
@@ -452,7 +452,7 @@ namespace AJE
                 eff = -C_star * Math.Pow(NTU, 0.78);            //note: this needs to be made into an FGtable for speed purposes
                 eff = Math.Exp(eff) - 1;
                 eff *= Math.Pow(NTU, 0.22) / C_star;
-                eff = Math.Exp(eff);
+                eff = 1 - Math.Exp(eff);
 
                 _intercoolerEfficiency = eff;
 
