@@ -638,6 +638,8 @@ namespace AJE
                     double m_dot_fuel0 = airflow0 * fuelRatio;
                     double power0 = m_dot_fuel0 * efficiency * _bsfcRecip - _boostCosts[0];
 
+                    double chargeTemp0 = _chargeTemp;   //temp storage
+
                     double airflow1 = GetAirflow(pAmb, solver.t0, solver.R_c, solver.Cp_c, solver.gamma_c, shaftRPM, MAP1, solver.vel);
                     double m_dot_fuel1 = airflow1 * fuelRatio;
                     double power1 = m_dot_fuel1 * efficiency * _bsfcRecip - _boostCosts[1];
@@ -651,7 +653,7 @@ namespace AJE
                         _airFlow = airflow0;
                         _fuelFlow = m_dot_fuel0;
                         _boostMode = 0;
-                        //_chargeTemp = GetCAT(MAP, pAmb, solver.t0, Math.Min(solver.vel, _minAllowedIntercoolerVel), solver.R_c, solver.Cp_c); // duplication of effort, but oh well, this needs to be done to reset _chargeTemp
+                        _chargeTemp = chargeTemp0;
                     }
                     else
                     {
