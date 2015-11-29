@@ -49,6 +49,12 @@ namespace AJE
         [KSPField]
         public double meredithEffect = 0.0d;
         [KSPField]
+        public bool coolingLegacy = true;
+        [KSPField]
+        public double intercoolerCoolingFactor = 1;
+        [KSPField]
+        public double intercoolerIntakeArea = 1;
+        [KSPField]
         public double coolerEffic = 0d;
         [KSPField]
         public double coolerMin = -200f;
@@ -83,6 +89,9 @@ namespace AJE
 
         [KSPField(isPersistant = false, guiActive = true, guiName = "Charge Air Temp", guiFormat = "N2", guiUnits = " K")]
         public float chargeAirTemp = 288.0f;
+
+        [KSPField(isPersistant = false, guiActive = true, guiName = "Intercooler Eff", guiFormat = "N2")]
+        public float coolerEfficiency = 1;
 
         [KSPField(guiActive = true, guiName = "Exhaust Thrust", guiFormat = "N5", guiUnits = " kN")]
         public float netExhaustThrust = 0.0f;
@@ -196,6 +205,7 @@ namespace AJE
                     ramAir,
                     displacement * displMultiplier,
                     compression,
+                    coolingLegacy, intercoolerCoolingFactor, intercoolerIntakeArea,
                     coolerEffic,
                     coolerMin + CTOK,
                     exhaustThrust,
@@ -272,6 +282,7 @@ namespace AJE
                 chargeAirTemp = (float)pistonEngine.GetChargeTemp();
                 netExhaustThrust = (float)(pistonEngine._netExhaustThrust * 0.001d);
                 netMeredithEffect = (float)(pistonEngine._netMeredithEffect * 0.001d);
+                coolerEfficiency = (float)(pistonEngine._intercoolerEfficiency);
             }
             propRPM = (float)solverProp.GetPropRPM();
             propPitch = (float)solverProp.GetPropPitch();

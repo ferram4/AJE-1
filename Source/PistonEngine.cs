@@ -37,8 +37,12 @@ namespace AJE
         public double _boostSwitch;
         public double _bsfc;
         public double _bsfcRecip;
+        public bool _coolerLegacy = true;       //use the legacy cooling model
         public double _coolerEffic;
         public double _coolerMin;
+        public double _intercoolerCoolingFactor; //intercooler surface area * instantaneous section heat transfer coefficient
+        public double _intercoolerIntakeArea;   //area for cooling air throuhg outer portion of intercooler
+        public double _minAllowedIntercoolerVel = 10;
         public double _ramAir;
         public double _exhaustThrust = 0d;
         public double _meredithEffect = 0d;
@@ -61,6 +65,7 @@ namespace AJE
         public double _engineThrust;
         public double _netMeredithEffect;
         public double _netExhaustThrust;
+        public double _intercoolerEfficiency;
 
         public const double HP2W = 745.699872d;
         public const double W2HP = 1d / HP2W;
@@ -75,12 +80,13 @@ namespace AJE
         const double T0 = 288.15d; // 15C, reference temp at sea level
         const double P0 = 101325d;
         const double RAIR0 = 287d;
+        const double CP0 = 1007d;
         const double GAMMA0 = 1.4d;
         #endregion
 
         #region Setup
         public PistonEngine(double power, double speed, double BSFC, double ramair, double displacement,
-            double compression, double coolerEffic, double coolerMin, double exhaustThrust, double meredithEffect,
+            double compression, bool legacyCooling, double intercoolerCoolingArea, double intercoolerIntakeArea, double coolerEffic, double coolerMin, double exhaustThrust, double meredithEffect,
             double wastegate, double boost0, double boost1, double rated0, double rated1, double cost1, double switchAlt, bool turbo)
         {
             _running = false;
@@ -116,6 +122,11 @@ namespace AJE
             _chargeTarget = 1d;
             _turboLag = 2d;
             _chargeDensity = 0d;
+
+            _coolerLegacy = legacyCooling;
+            _intercoolerCoolingFactor = intercoolerCoolingArea;
+            _intercoolerIntakeArea = intercoolerIntakeArea;
+            _intercoolerEfficiency = coolerEffic;
 
             // set reference conditions
             _power0 = power;
@@ -282,11 +293,11 @@ namespace AJE
             float fuelAirRatio = FuelAirRatio(0.7f);
             double efficiency = mixtureEfficiency.Evaluate(fuelAirRatio);
             double MAP = Math.Min(_maxMP, P0 * _boostMults[0]);
-            double m_dot_air = GetAirflow(P0, T0, RAIR0, GAMMA0, _rpm0, MAP);
+            double m_dot_air = GetAirflow(P0, T0, RAIR0, CP0, GAMMA0, _rpm0, MAP, 0);
             double m_dot_fuel = fuelAirRatio * m_dot_air;
             double power = m_dot_fuel * efficiency * _bsfcRecip;
             _voleffic = _power0 / power;
-            double m_dot_air2 = GetAirflow(P0, T0, RAIR0, GAMMA0, _rpm0, MAP);
+            double m_dot_air2 = GetAirflow(P0, T0, RAIR0, CP0, GAMMA0, _rpm0, MAP, 0);
             double m_dot_fuel2 = fuelAirRatio * m_dot_air2;
             power = m_dot_fuel2 * efficiency * _bsfcRecip;
             MonoBehaviour.print("*AJE* Setting volumetric efficiency. At SL with MAP " + MAP + ", power = " + power / HP2W + "HP, BSFC = " + _bsfc + ", mda/f = " + m_dot_air2 + "/" + m_dot_fuel2 + ", VE = " + _voleffic + ". Orig a/f: " + m_dot_air + "/" + m_dot_fuel);
@@ -378,27 +389,91 @@ namespace AJE
         // at given manifold absolute pressure MAP, and given ambient pressure and temp
         // Very simple model: the aftercooler will cool the charge to (cooling efficiency) of
         //  ambient temperature, to a minimum temperature of (cooler min)
-        public double GetCAT(double MAP, double pAmb, double tAmb)
+        public double GetCAT(double MAP, double pAmb, double tAmb, double ambientVel, double RAir, double Cp_c, double volAirflow)
         {
             // Air entering the manifold does so rapidly, and thus the
             // pressure change can be assumed to be adiabatic.  Calculate a
             // temperature change, and then apply aftercooling/intercooling (if any)
-            double T = tAmb * Math.Pow((MAP * MAP) / (pAmb * pAmb), 1d / 7d);
-            return Math.Max(_coolerMin, T - (T - tAmb) * _coolerEffic);
+            double T_h = tAmb * Math.Pow((MAP * MAP) / (pAmb * pAmb), 1d / 7d);
+            if (_coolerLegacy)
+            {
+                return Math.Max(_coolerMin, T_h - (T_h - tAmb) * _coolerEffic);
+            }
+
+            //model intercooler as a crossflow, double-unmixed heat exchanger
+            double radiatorMassFlow = _intercoolerIntakeArea * ambientVel * pAmb / (RAir * tAmb);
+            double C_h, C_c;        //hot and cold heat capacities
+            C_c = radiatorMassFlow * Cp_c;
+            C_h = _airFlow * Cp_c;
+
+            double C_min, C_max;
+            double C_star, NTU, eff;
+            if(C_c < C_h)
+            {
+                if (C_c <= 0)
+                {
+                    _intercoolerEfficiency = 0;
+                    return T_h;
+                }
+
+                C_min = C_c;
+                C_max = C_h;
+
+                C_star = C_min / C_max;
+                NTU = _intercoolerCoolingFactor / C_min;
+
+                eff = -C_star * Math.Pow(NTU, 0.78);            //note: this needs to be made into an FGtable for speed purposes
+                eff = Math.Exp(eff) - 1;
+                eff *= Math.Pow(NTU, 0.22) / C_star;
+                eff = Math.Exp(eff);
+
+                _intercoolerEfficiency = eff;
+
+                double T_out = RAir * radiatorMassFlow / (volAirflow * MAP);
+                T_out *= eff * (T_h - tAmb);
+                T_out = T_h / (1 + T_out);
+
+                return T_out;
+            }
+            else
+            {
+                if (C_h <= 0)
+                {
+                    _intercoolerEfficiency = 0;
+                    return T_h;
+                }
+
+                C_min = C_h;
+                C_max = C_c;
+
+                C_star = C_min / C_max;
+                NTU = _intercoolerCoolingFactor / C_min;
+
+                eff = -C_star * Math.Pow(NTU, 0.78);            //note: this needs to be made into an FGtable for speed purposes
+                eff = Math.Exp(eff) - 1;
+                eff *= Math.Pow(NTU, 0.22) / C_star;
+                eff = Math.Exp(eff);
+
+                _intercoolerEfficiency = eff;
+
+                double T_out = T_h - eff * (T_h - tAmb);
+
+                return T_out;
+            }
         }
 
         // return the mass airflow through the engine
         // running at given speed in radians/sec, given manifold absolute pressure MAP,
-        // given ambient pressure and temperature. Depends on displacement and
+        // given ambient pressure, temperature and velocity. Depends on displacement and
         // the volumetric efficiency multiplier.
-        public double GetAirflow(double pAmb, double tAmb, double RAir, double gamma, double speed, double MAP)
+        public double GetAirflow(double pAmb, double tAmb, double RAir, double Cp_c, double gamma, double speed, double MAP, double ambientVel)
         {
             //from JSBSim
             // air flow
             double swept_volume = (_displacement * speed * (1d/60d)) * 0.5d;
             double v_dot_air = swept_volume * GetPressureVE(pAmb, MAP, gamma) * _voleffic * _volEfficMult;
 
-            _chargeTemp = GetCAT(MAP, pAmb, tAmb);
+            _chargeTemp = GetCAT(MAP, pAmb, tAmb, Math.Max(ambientVel, _minAllowedIntercoolerVel), RAir, Cp_c, v_dot_air);
             _chargeDensity = MAP / (RAir * _chargeTemp);
             return v_dot_air * _chargeDensity;
         }
@@ -489,7 +564,6 @@ namespace AJE
         public void Update(EngineSolver solver, double shaftRPM, double deltaTime)
         {
             double pAmb = solver.p0 + _ramAir * solver.Q;
-
             _throttle = solver.throttle;
             _fuel = solver.ffFraction > 0d;
             _engineThrust = 0d;
@@ -546,7 +620,7 @@ namespace AJE
                     MAP = CalcMAP(pAmb, _boostMode, _charge);
 
                     // Compute fuel flow
-                    _airFlow = GetAirflow(pAmb, solver.t0, solver.R_c, solver.gamma_c, shaftRPM, MAP);
+                    _airFlow = GetAirflow(pAmb, solver.t0, solver.R_c, solver.Cp_c, solver.gamma_c, shaftRPM, MAP, solver.vel);
                     _fuelFlow = _airFlow * fuelRatio;
                     power = _fuelFlow * efficiency * _bsfcRecip - _boostCosts[_boostMode];
                 }
@@ -560,11 +634,11 @@ namespace AJE
                     double MAP0 = CalcMAP(pAmb, 0, charge0);
                     double MAP1 = CalcMAP(pAmb, 1, charge1);
 
-                    double airflow0 = GetAirflow(pAmb, solver.t0, solver.R_c, solver.gamma_c, shaftRPM, MAP0);
+                    double airflow0 = GetAirflow(pAmb, solver.t0, solver.R_c, solver.Cp_c, solver.gamma_c, shaftRPM, MAP0, solver.vel);
                     double m_dot_fuel0 = airflow0 * fuelRatio;
                     double power0 = m_dot_fuel0 * efficiency * _bsfcRecip - _boostCosts[0];
 
-                    double airflow1 = GetAirflow(pAmb, solver.t0, solver.R_c, solver.gamma_c, shaftRPM, MAP1);
+                    double airflow1 = GetAirflow(pAmb, solver.t0, solver.R_c, solver.Cp_c, solver.gamma_c, shaftRPM, MAP1, solver.vel);
                     double m_dot_fuel1 = airflow1 * fuelRatio;
                     double power1 = m_dot_fuel1 * efficiency * _bsfcRecip - _boostCosts[1];
 
@@ -577,7 +651,7 @@ namespace AJE
                         _airFlow = airflow0;
                         _fuelFlow = m_dot_fuel0;
                         _boostMode = 0;
-                        _chargeTemp = GetCAT(MAP, pAmb, solver.t0); // duplication of effort, but oh well, this needs to be done to reset _chargeTemp
+                        //_chargeTemp = GetCAT(MAP, pAmb, solver.t0, Math.Min(solver.vel, _minAllowedIntercoolerVel), solver.R_c, solver.Cp_c); // duplication of effort, but oh well, this needs to be done to reset _chargeTemp
                     }
                     else
                     {
