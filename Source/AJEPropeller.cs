@@ -256,7 +256,16 @@ namespace AJE
                 inductionDevices = new ForcedInductionDevice[devices.Length];
 
                 for (int i = 0; i < devices.Length; i++)
-                    inductionDevices[i] = new ForcedInductionDevice(devices[i]);
+                    inductionDevices[i] = new ForcedInductionDevice(devices[i], boostMultiplier);
+            }
+        }
+        public override void OnSave(ConfigNode node)
+        {
+            base.OnSave(node);
+            if(inductionDevices != null)
+            {
+                for(int i = 0; i < inductionDevices.Length; i++)
+                    inductionDevices[i].SaveDevice(node, boostMultiplierRecip);
             }
         }
         #endregion

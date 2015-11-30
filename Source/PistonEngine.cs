@@ -11,25 +11,26 @@ namespace AJE
 {
     public class ForcedInductionDevice
     {
-        public bool isTurbo;            //is this a turbocharger or a supercharger?
+        public bool isTurbo = false;            //is this a turbocharger or a supercharger?
         public int stage;               //which order does this charger show up in?
         public int spool;               //does it run on the same spool as other chargers?  If so, match pressure ratio values
 
         double[] pressureRatios;        //pressure ratios the device can provide at various speeds
+        double[] switchAlts;
         double[] pAmbSwitch;            //ambient pressure to switch between speeds
-        double invEfficiency;           //efficiency value for determining extra heat added to air due to compression
-        double presRatioFracVariance;   //fraction of pressureRatio value that can be varied as needed in order to optimize power output
-        double maxPresRatioPAmb;        //maximum post-charger pressure from this device assuming no other devices in series; used to control presRatioVariance
+        double invEfficiency = 1;           //efficiency value for determining extra heat added to air due to compression
+        double presRatioFracVariance = 0;   //fraction of pressureRatio value that can be varied as needed in order to optimize power output
+        double maxPresRatioPAmb = double.PositiveInfinity;        //maximum post-charger pressure from this device assuming no other devices in series; used to control presRatioVariance
 
-        public ForcedInductionDevice(ConfigNode node)
+        public ForcedInductionDevice(ConfigNode node, double boostMultiplier)
         {
             if (node.HasValue("isTurbo"))
                 isTurbo = bool.Parse(node.GetValue("isTurbo"));
 
             if (node.HasValue("stage"))
-                presRatioFracVariance = int.Parse(node.GetValue("stage"));
+                stage = int.Parse(node.GetValue("stage"));
             if (node.HasValue("spool"))
-                presRatioFracVariance = int.Parse(node.GetValue("spool"));
+                spool = int.Parse(node.GetValue("spool"));
            
             if (node.HasValue("efficiency"))
                 invEfficiency = 1 / double.Parse(node.GetValue("efficiency"));
@@ -37,9 +38,12 @@ namespace AJE
             if (node.HasValue("presRatioFracVariance"))
                 presRatioFracVariance = double.Parse(node.GetValue("presRatioFracVariance"));
 
-            if(node.HasNode("PressureRatios"))
+            if (node.HasValue("maxPresRatioPAmb"))
+                maxPresRatioPAmb = double.Parse(node.GetValue("maxPresRatioPAmb")) * boostMultiplier;
+
+            if (node.HasNode("PressureRatios"))
             {
-                ConfigNode pres = node.GetNode("AltitudePressureRatios");
+                ConfigNode pres = node.GetNode("PressureRatios");
                 pressureRatios = new double[pres.values.Count];
                 for(int i = 0; i < pres.values.Count; i++)
                 {
@@ -51,27 +55,60 @@ namespace AJE
             {
                 ConfigNode pres = node.GetNode("SwitchAlts");
                 CelestialBody body = FindHomeworld();
+                switchAlts = new double[pres.values.Count];
                 pAmbSwitch = new double[pres.values.Count];
                 if(body == null)
                     for (int i = 0; i < pres.values.Count; i++)
                     {
-                        pAmbSwitch[i] = GetPressure(double.Parse(pres.values[i].value));
+                        switchAlts[i] = double.Parse(pres.values[i].value);
+                        pAmbSwitch[i] = GetPressure(switchAlts[i]);
 
                     }
                 else
                     for (int i = 0; i < pres.values.Count; i++)
                     {
-                        pAmbSwitch[i] = body.GetPressure(double.Parse(pres.values[i].value)) * 1000.0;
-
+                        switchAlts[i] = double.Parse(pres.values[i].value);
+                        pAmbSwitch[i] = body.GetPressure(switchAlts[i]) * 1000.0;
                     }
 
             }
             else
             {   //just a temp thing to calculate auto-switch altitudes
+                switchAlts = new double[pressureRatios.Length - 1];
                 pAmbSwitch = new double[pressureRatios.Length - 1];
                 for (int i = 0; i < pAmbSwitch.Length; i++)
+                {
+                    switchAlts[i] = 1000;
                     pAmbSwitch[i] = i * 3000;
+                }
             }
+        }
+
+        public void SaveDevice(ConfigNode node, double recipBoostMultiplier)
+        {
+            ConfigNode deviceNode = new ConfigNode("ForcedInductionDevice");
+            node.AddValue("isTurbo", isTurbo);
+            node.AddValue("stage", stage);
+            node.AddValue("spool", spool);
+            node.AddValue("efficiency", 1 / invEfficiency);
+            node.AddValue("presRatioFracVariance", presRatioFracVariance);
+            node.AddValue("maxPresRatioPAmb", maxPresRatioPAmb);
+
+            ConfigNode includedNode = new ConfigNode("PressureRatios");
+            for(int i = 0; i < pressureRatios.Length; i++)
+            {
+                includedNode.AddValue("key", pressureRatios[i]);
+            }
+            deviceNode.AddNode(includedNode);
+
+            includedNode = new ConfigNode("SwitchAlts");
+            for (int i = 0; i < switchAlts.Length; i++)
+            {
+                includedNode.AddValue("key", switchAlts[i]);
+            }
+            deviceNode.AddNode(includedNode);
+
+            node.AddNode(deviceNode);
         }
 
         public void SetSwitchPres(double[] newPresSwitch)
@@ -386,7 +423,10 @@ namespace AJE
             }
 
             // compute volumetric efficiency of engine, based on rated power and BSFC.
-            ComputeVEMultiplier(); 
+            ComputeVEMultiplier();
+            Debug.Log("This engine is using legacy boost: " + _boostLegacy);
+            if (!_boostLegacy)
+                DataDump();
         }
 
         // gets pressure at given alt in meters, used as fallback for SetBoostParams
@@ -538,6 +578,64 @@ namespace AJE
             MonoBehaviour.print("*AJE* Setting volumetric efficiency. At SL with MAP " + MAP + ", power = " + power / HP2W + "HP, BSFC = " + _bsfc + ", mda/f = " + m_dot_air2 + "/" + m_dot_fuel2 + ", VE = " + _voleffic + ". Orig a/f: " + m_dot_air + "/" + m_dot_fuel);
         }
 
+        public void DataDump()
+        {
+            CelestialBody body = FindHomeworld();
+            Debug.Log("Writing engine perf");
+            if (body == null)
+                return;
+
+            System.IO.StreamWriter writer = new System.IO.StreamWriter(new System.IO.FileStream("engineData.csv", System.IO.FileMode.Create));
+
+            for(double altitude = 0; altitude < 20000; altitude += 1000)
+            {
+                double pres, temp;
+                pres = body.GetPressure(altitude) * 1000;
+                temp = body.GetTemperature(altitude);
+
+                double power;
+                double MAP;
+                float fuelRatio = FuelAirRatio(_mixture);
+                double efficiency = mixtureEfficiency.Evaluate(fuelRatio);
+                double superChargerPowerUsage = 0;
+
+                _chargeTarget = 1;
+                _charge = 1;
+                double totalPresRatio = 1;
+                double prevTemp = temp;
+                for (int i = 0; i < inductionDevices.Length; i++)
+                {
+                    ForcedInductionDevice device = inductionDevices[i];
+                    double devicePresRatio = device.GetPressureRatio(pres);
+                    double chargeTarget = GetChargeTarget(_rpm0, devicePresRatio);
+                    double charge = GetCharge(chargeTarget, 1, false);
+
+                    _chargeTarget *= chargeTarget;
+                    _charge *= charge;
+                    totalPresRatio *= devicePresRatio;
+
+                    double tempRatio = device.GetTempRatio(devicePresRatio);
+                    double tempDiff = (tempRatio - 1.0) * prevTemp;
+                    double powerExtracted = device.GetPowerExtractedPerMassFlow(tempDiff, CP0);
+                    superChargerPowerUsage += powerExtracted;
+                    prevTemp += tempDiff;
+                }
+                superChargerPowerUsage *= _airFlow;
+
+                MAP = CalcMAP(pres, totalPresRatio, _charge);
+
+                _airFlow = GetAirflow(pres, temp, prevTemp, RAIR0, CP0, GAMMA0, _rpm0, MAP, 0);
+                _fuelFlow = _airFlow * fuelRatio;
+                power = _fuelFlow * efficiency * _bsfcRecip - superChargerPowerUsage;
+
+                writer.Write(altitude);
+                writer.Write(",");
+                writer.Write(power * W2HP);
+                writer.WriteLine();
+            }
+
+            writer.Close();
+        }
         #endregion
 
         #region Getters/Setters
