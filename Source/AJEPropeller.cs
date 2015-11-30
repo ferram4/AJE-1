@@ -146,6 +146,7 @@ namespace AJE
 
         protected PistonEngine pistonEngine;
         protected SolverPropeller solverProp;
+        protected ForcedInductionDevice[] inductionDevices;
 
         // multipliers
         protected double boostMultiplier;
@@ -213,7 +214,8 @@ namespace AJE
                     exhaustThrust,
                     meredithEffect,
                     // Super/turbo params:
-                    wastegateMP * boostMultiplier, boost0 * boostMultiplier, boost1 * boostMultiplier, rated0, rated1, cost1 * powerMultiplier, switchAlt, turbo
+                    wastegateMP * boostMultiplier, boost0 * boostMultiplier, boost1 * boostMultiplier, rated0, rated1, cost1 * powerMultiplier, switchAlt, turbo,
+                    inductionDevices
                     );
 
                 if (autoignitionTemp < 0f || float.IsInfinity(autoignitionTemp))
@@ -243,6 +245,19 @@ namespace AJE
             base.OnStart(state);
 
             SetFields();
+        }
+
+        public override void OnLoad(ConfigNode node)
+        {
+            base.OnLoad(node);
+            if(node.HasNode("ForcedInductionDevice"))
+            {
+                ConfigNode[] devices = node.GetNodes("ForcedInductionDevice");
+                inductionDevices = new ForcedInductionDevice[devices.Length];
+
+                for (int i = 0; i < devices.Length; i++)
+                    inductionDevices[i] = new ForcedInductionDevice(devices[i]);
+            }
         }
         #endregion
 

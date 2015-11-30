@@ -9,6 +9,177 @@ using SolverEngines;
 
 namespace AJE
 {
+    public class ForcedInductionDevice
+    {
+        public bool isTurbo;            //is this a turbocharger or a supercharger?
+        public int stage;               //which order does this charger show up in?
+        public int spool;               //does it run on the same spool as other chargers?  If so, match pressure ratio values
+
+        double[] pressureRatios;        //pressure ratios the device can provide at various speeds
+        double[] pAmbSwitch;            //ambient pressure to switch between speeds
+        double invEfficiency;           //efficiency value for determining extra heat added to air due to compression
+        double presRatioFracVariance;   //fraction of pressureRatio value that can be varied as needed in order to optimize power output
+        double maxPresRatioPAmb;        //maximum post-charger pressure from this device assuming no other devices in series; used to control presRatioVariance
+
+        public ForcedInductionDevice(ConfigNode node)
+        {
+            if (node.HasValue("isTurbo"))
+                isTurbo = bool.Parse(node.GetValue("isTurbo"));
+
+            if (node.HasValue("stage"))
+                presRatioFracVariance = int.Parse(node.GetValue("stage"));
+            if (node.HasValue("spool"))
+                presRatioFracVariance = int.Parse(node.GetValue("spool"));
+           
+            if (node.HasValue("efficiency"))
+                invEfficiency = 1 / double.Parse(node.GetValue("efficiency"));
+
+            if (node.HasValue("presRatioFracVariance"))
+                presRatioFracVariance = double.Parse(node.GetValue("presRatioFracVariance"));
+
+            if(node.HasNode("PressureRatios"))
+            {
+                ConfigNode pres = node.GetNode("AltitudePressureRatios");
+                pressureRatios = new double[pres.values.Count];
+                for(int i = 0; i < pres.values.Count; i++)
+                {
+                    pressureRatios[i] = double.Parse(pres.values[i].value);
+                }
+            }
+
+            if (node.HasNode("SwitchAlts"))
+            {
+                ConfigNode pres = node.GetNode("SwitchAlts");
+                CelestialBody body = FindHomeworld();
+                pAmbSwitch = new double[pres.values.Count];
+                if(body == null)
+                    for (int i = 0; i < pres.values.Count; i++)
+                    {
+                        pAmbSwitch[i] = GetPressure(double.Parse(pres.values[i].value));
+
+                    }
+                else
+                    for (int i = 0; i < pres.values.Count; i++)
+                    {
+                        pAmbSwitch[i] = body.GetPressure(double.Parse(pres.values[i].value)) * 1000.0;
+
+                    }
+
+            }
+            else
+            {   //just a temp thing to calculate auto-switch altitudes
+                pAmbSwitch = new double[pressureRatios.Length - 1];
+                for (int i = 0; i < pAmbSwitch.Length; i++)
+                    pAmbSwitch[i] = i * 3000;
+            }
+        }
+
+        public void SetSwitchPres(double[] newPresSwitch)
+        {
+            pAmbSwitch = newPresSwitch;
+        }
+
+        public void SetMaxPresRatioPAmb(double maxPres)
+        {
+            maxPresRatioPAmb = maxPres;
+        }
+
+        public double GetPressureRatio(double pAmb)
+        {
+            double presRatio = 1;
+            for(int i = 0; i < pAmbSwitch.Length; i++)
+            {
+                if (pAmb < pAmbSwitch[i])
+                {
+                    presRatio = pressureRatios[i];
+                    break;
+                }
+            }
+            presRatio = pressureRatios[pAmbSwitch.Length];
+
+            if (presRatio * pAmb > maxPresRatioPAmb)
+            {
+                double presRatioVar = maxPresRatioPAmb / pAmb;
+                double minPresRatio = presRatio * presRatioFracVariance;
+                if (presRatioVar > minPresRatio)
+                    presRatio = presRatioVar;
+                else
+                    presRatio = minPresRatio;
+            }
+
+            return presRatio;
+        }
+
+        public double GetPressureRatio(int presRatioIndex, double pAmb)
+        {
+            double presRatio =  pressureRatios[presRatioIndex];
+            if (presRatio * pAmb > maxPresRatioPAmb)
+            {
+                double presRatioVar = maxPresRatioPAmb / pAmb;
+                double minPresRatio = presRatio * presRatioFracVariance;
+                if (presRatioVar > minPresRatio)
+                    presRatio = presRatioVar;
+                else
+                    presRatio = minPresRatio;
+            }
+            return presRatio;
+        }
+
+        public double GetTempRatio(double presRatio)
+        {
+            return Math.Pow(presRatio * presRatio, 1d / 7d) * invEfficiency;
+        }
+
+        public double GetPowerExtractedPerMassFlow(double tempDiff, double cP)
+        {
+            if (!isTurbo)
+                return tempDiff * cP;
+            else
+                return 0;       //turbos don't extract any power from the engine that wasn't already lost
+        }
+
+        // gets pressure at given alt in meters, used as fallback for SetBoostParams
+        public double GetPressure(double alt)
+        {
+            if (alt < 11d)
+                return 101325d * Math.Pow((1d - 0.0065d * alt / 288.15d), 5.2561);
+            else
+                return 101325d * Math.Pow((1d - 0.0065 * 11d / 288.15), 5.2561)
+                    * Math.Exp(6371000d * 6371000d / ((6371000 + alt) * (6371000 + alt)) * 9.80665d * (11000d - alt) / 287.3d / 329.65d);
+        }
+        CelestialBody RecurseFindHomeworld(PSystemBody b)
+        {
+            if (b.celestialBody != null && b.celestialBody.isHomeWorld)
+                return b.celestialBody;
+            foreach (PSystemBody c in b.children)
+            {
+                CelestialBody h = RecurseFindHomeworld(c);
+                if (h != null)
+                    return h;
+            }
+            return null;
+        }
+        CelestialBody FindHomeworld()
+        {
+            CelestialBody body = null;
+
+            if (Planetarium.fetch)
+                body = Planetarium.fetch.Home;
+
+            if (body == null && FlightGlobals.fetch != null && FlightGlobals.fetch.bodies != null)
+                foreach (CelestialBody b in FlightGlobals.fetch.bodies)
+                    if (b.isHomeWorld)
+                        return b;
+
+            if (body == null && PSystemManager.Instance != null && PSystemManager.Instance.systemPrefab != null)
+            {
+                body = RecurseFindHomeworld(PSystemManager.Instance.systemPrefab.rootBody);
+            }
+
+            return body;
+        }
+    }
+    
     public class PistonEngine : ITorqueProducer
     {
         #region Members
@@ -31,19 +202,27 @@ namespace AJE
         public double _minthrottle; // minimum throttle [0:1]
         public double _voleffic; // volumetric efficiency
         public double _volEfficMult; // multiplier to VE, for tweaking.
+
+        public bool _boostLegacy = true;
         public double[] _boostMults;
         public double[] _boostCosts;
         public int _boostMode;
         public double _boostSwitch;
+
+        public ForcedInductionDevice[] inductionDevices;
+
         public double _bsfc;
         public double _bsfcRecip;
+
         public bool _coolerLegacy = true;       //use the legacy cooling model
         public double _coolerEffic;
         public double _coolerMin;
+        //technically, these are currently coded as aftercoolers, so...
         public double _intercoolerCoolingFactor; //intercooler surface area * heat flux per Kelvin for this design
         public double _intercoolerIntakeArea;   //area for cooling air throuhg outer portion of intercooler
         public double _minAllowedIntercoolerVel = 10;
         public FGTable _intercoolerEffTable = null;
+
         public double _ramAir;
         public double _exhaustThrust = 0d;
         public double _meredithEffect = 0d;
@@ -88,7 +267,7 @@ namespace AJE
         #region Setup
         public PistonEngine(double power, double speed, double BSFC, double ramair, double displacement,
             double compression, bool legacyCooling, double intercoolerCoolingArea, double intercoolerIntakeArea, string intercoolerType, double coolerEffic, double coolerMin, double exhaustThrust, double meredithEffect,
-            double wastegate, double boost0, double boost1, double rated0, double rated1, double cost1, double switchAlt, bool turbo)
+            double wastegate, double boost0, double boost1, double rated0, double rated1, double cost1, double switchAlt, bool turbo, ForcedInductionDevice[] forcedInductionDevices)
         {
             _running = false;
             _fuel = true;
@@ -194,7 +373,17 @@ namespace AJE
             mixtureEfficiency.Load(GameDatabase.Instance.GetConfigNodes("AJEPISTONENGINES").FirstOrDefault().GetNode("AFREfficiency"));
 
             // Set turbo/super params
-            SetBoostParams(wastegate, boost0, boost1, rated0, rated1, cost1, switchAlt, turbo);
+            if (forcedInductionDevices == null)
+            {
+                _boostLegacy = true;
+                SetBoostParams(wastegate, boost0, boost1, rated0, rated1, cost1, switchAlt, turbo);
+            }
+            else
+            {
+                _boostLegacy = false;
+                inductionDevices = forcedInductionDevices;
+                _maxMP = wastegate;
+            }
 
             // compute volumetric efficiency of engine, based on rated power and BSFC.
             ComputeVEMultiplier(); 
@@ -312,16 +501,43 @@ namespace AJE
             // Assume boost0 at takeoff, up to max MP. We use optimal mixture for power.
             float fuelAirRatio = FuelAirRatio(0.7f);
             double efficiency = mixtureEfficiency.Evaluate(fuelAirRatio);
-            double MAP = Math.Min(_maxMP, P0 * _boostMults[0]);
+            double MAP;
+            double boostCost = 0;
+            if (_boostLegacy)
+            {
+                MAP = Math.Min(_maxMP, P0 * _boostMults[0]);
+                boostCost = _boostCosts[0];
+            }
+            else
+            {
+                double presRatio = 1;
+                double prevTemp = T0;
+                for (int i = 0; i < inductionDevices.Length; i++)
+                {
+                    ForcedInductionDevice device = inductionDevices[i];
+                    presRatio *= device.GetPressureRatio(P0);
+                    double tempRatio = device.GetTempRatio(presRatio);
+                    double tempDiff = (tempRatio - 1) * prevTemp;
+
+                    boostCost += device.GetPowerExtractedPerMassFlow(tempDiff, CP0);
+                }
+                MAP = Math.Min(_maxMP, P0 * presRatio);
+            }
             double m_dot_air = GetAirflow(P0, T0, RAIR0, CP0, GAMMA0, _rpm0, MAP, 0);
             double m_dot_fuel = fuelAirRatio * m_dot_air;
-            double power = m_dot_fuel * efficiency * _bsfcRecip;
+
+            if (!_boostLegacy)
+                boostCost *= m_dot_air;
+
+            double power = m_dot_fuel * efficiency * _bsfcRecip - boostCost;
+
             _voleffic = _power0 / power;
             double m_dot_air2 = GetAirflow(P0, T0, RAIR0, CP0, GAMMA0, _rpm0, MAP, 0);
             double m_dot_fuel2 = fuelAirRatio * m_dot_air2;
             power = m_dot_fuel2 * efficiency * _bsfcRecip;
             MonoBehaviour.print("*AJE* Setting volumetric efficiency. At SL with MAP " + MAP + ", power = " + power / HP2W + "HP, BSFC = " + _bsfc + ", mda/f = " + m_dot_air2 + "/" + m_dot_fuel2 + ", VE = " + _voleffic + ". Orig a/f: " + m_dot_air + "/" + m_dot_fuel);
         }
+
         #endregion
 
         #region Getters/Setters
@@ -405,6 +621,7 @@ namespace AJE
             return ((gamma - 1f) / gamma) + (_compression - (pAmb / MAP)) / (gamma * (_compression - 1f));
         }
 
+        #region LegacyBoost
         // return the charge air temperature after heating and cooling (if any)
         // at given manifold absolute pressure MAP, and given ambient pressure and temp
         // Very simple model: the aftercooler will cool the charge to (cooling efficiency) of
@@ -559,6 +776,164 @@ namespace AJE
 
             return MAP;
         }
+        #endregion
+
+        #region StagedBoost
+        // return the charge air temperature after heating and cooling (if any)
+        // at given manifold absolute pressure MAP, and given ambient pressure and temp
+        // Very simple model: the aftercooler will cool the charge to (cooling efficiency) of
+        //  ambient temperature, to a minimum temperature of (cooler min)
+        public double GetCAT(double MAP, double pAmb, double tAmb, double exitTemp, double ambientVel, double RAir, double Cp_c, double volAirflow)
+        {
+            // Air entering the manifold does so rapidly, and thus the
+            // pressure change can be assumed to be adiabatic.  Calculate a
+            // temperature change, and then apply aftercooling/intercooling (if any)
+            double T_h = exitTemp;
+            if (_coolerLegacy)
+            {
+                return Math.Max(_coolerMin, T_h - (T_h - tAmb) * _coolerEffic);
+            }
+
+            //model intercooler as a crossflow, double-unmixed heat exchanger using the effectiveness-NTU method
+            double radiatorMassFlow = _intercoolerIntakeArea * ambientVel * pAmb / (RAir * tAmb);
+            double C_h, C_c;        //hot and cold heat capacities
+            C_c = radiatorMassFlow * Cp_c;
+            C_h = _airFlow * Cp_c;
+
+            double C_min, C_max;
+            double C_star, NTU, eff;
+            if (C_c < C_h)
+            {
+                if (C_c <= 0)
+                {
+                    _intercoolerEfficiency = 0;
+                    return T_h;
+                }
+
+                C_min = C_c;
+                C_max = C_h;
+
+                C_star = C_min / C_max;
+                NTU = _intercoolerCoolingFactor / C_min;
+
+                eff = _intercoolerEffTable.GetValue(C_star, NTU);
+
+                _intercoolerEfficiency = eff;
+
+                double T_out = RAir * radiatorMassFlow / (volAirflow * MAP);
+                T_out *= eff * (T_h - tAmb);
+                T_out = T_h / (1 + T_out);
+
+                return T_out;
+            }
+            else
+            {
+                if (C_h <= 0)
+                {
+                    _intercoolerEfficiency = 0;
+                    return T_h;
+                }
+
+                C_min = C_h;
+                C_max = C_c;
+
+                C_star = C_min / C_max;
+                NTU = _intercoolerCoolingFactor / C_min;
+
+                eff = _intercoolerEffTable.GetValue(C_star, NTU);
+
+                _intercoolerEfficiency = eff;
+
+                double T_out = T_h - eff * (T_h - tAmb);
+
+                return T_out;
+            }
+        }
+
+        // return the mass airflow through the engine
+        // running at given speed in radians/sec, given manifold absolute pressure MAP,
+        // given ambient pressure, temperature and velocity. Depends on displacement and
+        // the volumetric efficiency multiplier.
+        public double GetAirflow(double pAmb, double tAmb, double exitTemp, double RAir, double Cp_c, double gamma, double speed, double MAP, double ambientVel)
+        {
+            //from JSBSim
+            // air flow
+            double swept_volume = (_displacement * speed * (1d / 60d)) * 0.5d;
+            double v_dot_air = swept_volume * GetPressureVE(pAmb, MAP, gamma) * _voleffic * _volEfficMult;
+
+            _chargeTemp = GetCAT(MAP, pAmb, tAmb, exitTemp, Math.Max(ambientVel, _minAllowedIntercoolerVel), RAir, Cp_c, v_dot_air);
+            _chargeDensity = MAP / (RAir * _chargeTemp);
+            return v_dot_air * _chargeDensity;
+        }
+
+        // Gets the target for the [turbo]supercharger
+        // takes engine speed, boost mode
+        double GetChargeTarget(double speed, double presRatio)
+        {
+            // Calculate the factor required to modify supercharger output for
+            // rpm. Assume that the normalized supercharger output ~= 1 when
+            // the engine is at the nominal peak-power rpm.  A power equation
+            // of the form (A * B^x * x^C) has been derived empirically from
+            // some representative supercharger data.  This provides
+            // near-linear output over the normal operating range, with
+            // fall-off in the over-speed situation.
+            double rpm_norm = (speed / _rpm0);
+            double A = 1.795206541d;
+            double B = 0.55620178d;
+            double C = 1.246708471d;
+            double rpm_factor = A * Math.Pow(B, rpm_norm) * Math.Pow(rpm_norm, C);
+            return 1d + ((presRatio - 1d) * rpm_factor);
+        }
+
+        double GetCharge(double target, double deltaTime, bool isTurbo)
+        {
+            double chg = _charge;
+            if (isTurbo)
+            {
+                // Superchargers have no lag
+                chg = target;
+            }
+            else //if (!_running)
+            {
+                // Turbochargers only work well when the engine is actually
+                // running.  The 25% number is a guesstimate from Vivian.
+
+                // now clamp near target
+
+                // Also now use when not running -- the point of this is turbo lag!
+                double delta = target - _charge;
+                if (delta > -0.05d * target && delta < 0.05d * target)
+                    chg = target;
+                else
+                    chg = _charge + delta * 0.25d * deltaTime;
+            }
+            return chg;
+        }
+
+        // return the manifold absolute pressure in pascals
+        // takes the ambient pressure and the boost mode
+        // clamps to [ambient pressure.....wastegate]
+        public double CalcMAP(double pAmb, double totalPresRatio, double charge)
+        {
+            // We need to adjust the minimum manifold pressure to get a
+            // reasonable idle speed (a "closed" throttle doesn't suck a total
+            // vacuum in real manifolds).  This is a hack.
+            double _minMP = (-0.004d * totalPresRatio) + _minthrottle;
+
+            double MAP = pAmb * charge;
+
+
+            // Scale the max MP according to the WASTEGATE control input.  Use
+            // the un-supercharged MP as the bottom limit.
+
+            MAP = Math.Min(MAP, Math.Max(_wastegate * _maxMP, pAmb));
+
+            // Scale to throttle setting
+            MAP *= _minMP + (1d - _minMP) * _throttle;
+
+            return MAP;
+        }
+        #endregion
 
         public double GetEGT(double combustion_efficiency, double T_amb, double Cp_air)
         {
@@ -621,66 +996,111 @@ namespace AJE
                 double MAP;
                 float fuelRatio = FuelAirRatio(_mixture);
                 double efficiency = mixtureEfficiency.Evaluate(fuelRatio);
-                if (_boostSwitch > 0)
+                double superChargerPowerUsage = 0;
+                if (_boostLegacy)
                 {
-                    if (pAmb < _boostSwitch - 1000d && _boostMode < 1)
-                        _boostMode++;
-                    if (pAmb > _boostSwitch + 1000d && _boostMode > 0)
-                        _boostMode--;
+                    #region legacyBoostCode
+                    if (_boostSwitch > 0)
+                    {
+                        if (pAmb < _boostSwitch - 1000d && _boostMode < 1)
+                            _boostMode++;
+                        if (pAmb > _boostSwitch + 1000d && _boostMode > 0)
+                            _boostMode--;
 
-                    _chargeTarget = GetChargeTarget(shaftRPM, _boostMode);
-                    _charge = GetCharge(_chargeTarget, deltaTime);
+                        _chargeTarget = GetChargeTarget(shaftRPM, _boostMode);
+                        _charge = GetCharge(_chargeTarget, deltaTime);
 
-                    MAP = CalcMAP(pAmb, _boostMode, _charge);
+                        MAP = CalcMAP(pAmb, _boostMode, _charge);
 
-                    // Compute fuel flow
-                    _airFlow = GetAirflow(pAmb, solver.t0, solver.R_c, solver.Cp_c, solver.gamma_c, shaftRPM, MAP, solver.vel);
+                        // Compute fuel flow
+                        _airFlow = GetAirflow(pAmb, solver.t0, solver.R_c, solver.Cp_c, solver.gamma_c, shaftRPM, MAP, solver.vel);
+                        _fuelFlow = _airFlow * fuelRatio;
+
+                        superChargerPowerUsage = _boostCosts[_boostMode];
+
+                        power = _fuelFlow * efficiency * _bsfcRecip - superChargerPowerUsage;
+                    }
+                    else // auto switch
+                    {
+                        // assume supercharger for now, so charge = target
+                        double target0 = GetChargeTarget(shaftRPM, 0);
+                        double target1 = GetChargeTarget(shaftRPM, 1);
+                        double charge0 = GetCharge(target0, deltaTime);
+                        double charge1 = GetCharge(target1, deltaTime);
+                        double MAP0 = CalcMAP(pAmb, 0, charge0);
+                        double MAP1 = CalcMAP(pAmb, 1, charge1);
+
+                        double airflow0 = GetAirflow(pAmb, solver.t0, solver.R_c, solver.Cp_c, solver.gamma_c, shaftRPM, MAP0, solver.vel);
+                        double m_dot_fuel0 = airflow0 * fuelRatio;
+
+                        superChargerPowerUsage = _boostCosts[0];
+                        double power0 = m_dot_fuel0 * efficiency * _bsfcRecip - superChargerPowerUsage;
+
+                        double chargeTemp0 = _chargeTemp;   //temp storage
+                        double superChargerPowerUsage0 = superChargerPowerUsage;
+
+                        double airflow1 = GetAirflow(pAmb, solver.t0, solver.R_c, solver.Cp_c, solver.gamma_c, shaftRPM, MAP1, solver.vel);
+                        double m_dot_fuel1 = airflow1 * fuelRatio;
+
+                        superChargerPowerUsage = _boostCosts[1];
+                        double power1 = m_dot_fuel1 * efficiency * _bsfcRecip - superChargerPowerUsage;
+
+                        if (power0 >= power1)
+                        {
+                            MAP = MAP0;
+                            _chargeTarget = target0;
+                            _charge = charge0;
+                            power = power0;
+                            _airFlow = airflow0;
+                            _fuelFlow = m_dot_fuel0;
+                            _boostMode = 0;
+                            _chargeTemp = chargeTemp0;
+                            superChargerPowerUsage = superChargerPowerUsage0;
+                        }
+                        else
+                        {
+                            MAP = MAP1;
+                            _chargeTarget = target1;
+                            _charge = charge1;
+                            power = power1;
+                            _airFlow = airflow1;
+                            _fuelFlow = m_dot_fuel1;
+                            _boostMode = 1;
+                        }
+                    }
+                    #endregion
+                }
+                else
+                {
+                    _chargeTarget = 1;
+                    _charge = 1;
+                    double totalPresRatio = 1;
+                    double prevTemp = solver.t0;
+                    for(int i = 0; i < inductionDevices.Length; i++)
+                    {
+                        ForcedInductionDevice device = inductionDevices[i];
+                        double devicePresRatio = device.GetPressureRatio(pAmb);
+                        double chargeTarget = GetChargeTarget(shaftRPM, devicePresRatio);
+                        double charge = GetCharge(chargeTarget, deltaTime, device.isTurbo);
+
+                        _chargeTarget *= chargeTarget;
+                        _charge *= charge;
+                        totalPresRatio *= devicePresRatio;
+
+                        double tempRatio = device.GetTempRatio(devicePresRatio);
+                        double tempDiff = (tempRatio - 1.0) * prevTemp;
+                        double powerExtracted = device.GetPowerExtractedPerMassFlow(tempDiff, solver.Cp_c);
+                        superChargerPowerUsage += powerExtracted;
+                        prevTemp += tempDiff;
+                    }
+                    superChargerPowerUsage *= _airFlow;
+
+                    MAP = CalcMAP(pAmb, totalPresRatio, _charge);
+
+                    _airFlow = GetAirflow(pAmb, solver.t0, prevTemp, solver.R_c, solver.Cp_c, solver.gamma_c, shaftRPM, MAP, solver.vel);
                     _fuelFlow = _airFlow * fuelRatio;
-                    power = _fuelFlow * efficiency * _bsfcRecip - _boostCosts[_boostMode];
+                    power = _fuelFlow * efficiency * _bsfcRecip - superChargerPowerUsage;
                 }
-                else // auto switch
-                {
-                    // assume supercharger for now, so charge = target
-                    double target0 = GetChargeTarget(shaftRPM, 0);
-                    double target1 = GetChargeTarget(shaftRPM, 1);
-                    double charge0 = GetCharge(target0, deltaTime);
-                    double charge1 = GetCharge(target1, deltaTime);
-                    double MAP0 = CalcMAP(pAmb, 0, charge0);
-                    double MAP1 = CalcMAP(pAmb, 1, charge1);
-
-                    double airflow0 = GetAirflow(pAmb, solver.t0, solver.R_c, solver.Cp_c, solver.gamma_c, shaftRPM, MAP0, solver.vel);
-                    double m_dot_fuel0 = airflow0 * fuelRatio;
-                    double power0 = m_dot_fuel0 * efficiency * _bsfcRecip - _boostCosts[0];
-
-                    double chargeTemp0 = _chargeTemp;   //temp storage
-
-                    double airflow1 = GetAirflow(pAmb, solver.t0, solver.R_c, solver.Cp_c, solver.gamma_c, shaftRPM, MAP1, solver.vel);
-                    double m_dot_fuel1 = airflow1 * fuelRatio;
-                    double power1 = m_dot_fuel1 * efficiency * _bsfcRecip - _boostCosts[1];
-
-                    if (power0 >= power1)
-                    {
-                        MAP = MAP0;
-                        _chargeTarget = target0;
-                        _charge = charge0;
-                        power = power0;
-                        _airFlow = airflow0;
-                        _fuelFlow = m_dot_fuel0;
-                        _boostMode = 0;
-                        _chargeTemp = chargeTemp0;
-                    }
-                    else
-                    {
-                        MAP = MAP1;
-                        _chargeTarget = target1;
-                        _charge = charge1;
-                        power = power1;
-                        _airFlow = airflow1;
-                        _fuelFlow = m_dot_fuel1;
-                        _boostMode = 1;
-                    }
-                }
-
                 _mp = MAP;
                 //_chargeTemp = GetCAT(MAP, pAmb, solver.t0); // duplication of effort, but oh well
 
@@ -688,7 +1108,7 @@ namespace AJE
                 _boostPressure = _mp - pAmb;
 
                 _power = power;
-                _totalPower = _power + _boostCosts[_boostMode];
+                _totalPower = _power + superChargerPowerUsage;
                 _egt = GetEGT(efficiency, solver.t0, solver.Cp_c);
 
                 // Additional thrust from engine
