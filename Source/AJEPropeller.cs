@@ -249,6 +249,15 @@ namespace AJE
 
         public override void OnLoad(ConfigNode node)
         {
+            if (part.partInfo.partPrefab != null)
+            {
+                ForcedInductionDevice[] prefabDevices = ((ModuleEnginesAJEPropeller)part.partInfo.partPrefab.Modules["ModuleEnginesAJEPropeller"]).inductionDevices;
+                if (prefabDevices != null)
+                {
+                    inductionDevices = new ForcedInductionDevice[prefabDevices.Length];
+                    prefabDevices.CopyTo(inductionDevices, 0);
+                }
+            }
             base.OnLoad(node);
             if(node.HasNode("ForcedInductionDevice"))
             {
